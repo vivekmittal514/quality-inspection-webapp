@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: S3 Uploader - sample application
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket to create
+  DomainName:
+    Type: String
+    Description: Domain name for the CloudFront distribution
+  SagemakerEndpointName:
+    Type: String
+    Description: Name of the Sagemaker endpoint
+    Default: "canvas-new-deployment-03-04-2025-2-46-PM"
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: "vpc-01da878c2bd88aa11"
+    Description: VPC ID where SageMaker endpoint is deployed
+  Subnet1:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-0a18a4f1ed28e93e6"
+    Description: Subnet ID where SageMaker endpoint is deployed
+  Subnet2:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-05e933724b1ae56c9"
+    Description: Subnet ID where SageMaker endpoint is deployed
+  Subnet3:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-00b037f6445d2dd5c"
+    Description: Subnet ID where SageMaker endpoint is deployed
+  Subnet4:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-0e2a2e38e324d535b"
+    Description: Subnet ID where SageMaker endpoint is deployed
+  Subnet5:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-02877580cb80614f4"
+    Description: Subnet ID where SageMaker endpoint is deployed
+  Subnet6:
+    Type: AWS::EC2::Subnet::Id
+    Default: "subnet-0f5772806db4e1f42"
+    Description: Subnet ID where SageMaker endpoint is deployed
+
+Resources:
+  # HTTP API
+  MyApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # CORS configuration - this is open for development only and should be restricted in prod.
+      # See https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-httpapi-httpapicorsconfiguration.html   
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - "*"   
+        AllowOrigins: 
+          - "*"      
+
+  ## Lambda functions
+  UploadRequestFunction:
+    # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Type: AWS::Serverless::Function 
+    Properties:
+      CodeUri: ./lambda/getSignedURL/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          UploadBucket: !Ref S3UploadBucket  
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref S3UploadBucket
+        ## This permission allows the Lambda function to request signed URLs
+        ## for objects that will be publicly readable. Uncomment if you want this ACL.
+        # - Statement:
+        #   - Effect: Allow
+        #     Resource: !Sub 'arn:aws:s3:::${S3UploadBucket}/'
+        #     Action:
+        #       - s3:putObjectAcl
+      Events:
+        UploadAssetAPI:
+          Type: HttpApi
+          Properties:
+            Path: /uploads
+            Method: get
+            ApiId: !Ref MyApi  
+
+  ## S3 bucket
+  S3UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      CorsConfiguration:
+        CorsRules:
+        - AllowedHeaders:
+            - "*"
+          AllowedMethods:
+            - GET
+            - PUT
+            - HEAD
+          AllowedOrigins:
+            - "*"
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-OAC
+        Description: Origin Access Control for S3 static website
+        SigningBehavior: always
+        SigningProtocol: sigv4
+        OriginAccessControlOriginType: s3
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${WebsiteBucket.Arn}/*
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: CDN for S3-hosted website
+        DefaultRootObject: index.html
+        Enabled: true
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          TargetOriginId: s3origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+        Origins:
+          - DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            Id: s3origin
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+
+  ImageHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: imageKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: imageKey
+          KeyType: HASH
+
+  AnalyzeImageApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./lambda/analyze-image/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      MemorySize: 256
+      Timeout: 300
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref ImageHistoryTable
+          BUCKET_NAME: !Ref S3UploadBucket
+          SAGEMAKER_ENDPOINT_NAME: !Ref SagemakerEndpointName  # Replace with your endpoint name
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref Subnet1
+          - !Ref Subnet2
+          - !Ref Subnet3
+          - !Ref Subnet4
+          - !Ref Subnet5
+          - !Ref Subnet6
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ImageHistoryTable
+        - S3ReadPolicy:
+            BucketName: !Ref WebsiteBucket
+        - S3CrudPolicy:
+            BucketName: !Ref S3UploadBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - 'sagemaker:InvokeEndpoint'
+              Resource:
+                - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/${SagemakerEndpointName}'
+        # Add VPC execution role permissions
+        - VPCAccessPolicy: {}
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /analyze-image
+            Method: post
+            ApiId: !Ref MyApi
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda to access SageMaker endpoint
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      # Add Ingress to the same security group for all traffic
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  GetHistoryApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./lambda/get-history/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref ImageHistoryTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ImageHistoryTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /get-history
+            Method: get
+            ApiId: !Ref MyApi
+
+## Take a note of the outputs for deploying the workflow templates in this sample application
+Outputs:
+  APIendpoint:
+    Description: "HTTP API endpoint URL"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com"
+  S3UploadBucketName:
+    Description: "S3 bucket for application uploads"
+    Value: !Ref 'S3UploadBucket'    
+  CloudFrontURL:
+    Description: URL of the CloudFront distribution
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+  BucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref WebsiteBucket
+

@@ -1,0 +1,9 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "file-uploader"
+resolve_s3 = true
+s3_prefix = "file-uploader"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+image_repositories = []
+parameter_overrides = "BucketName=\"team5-image-hosting-dallas\" DomainName=\"team5-dallas\" SagemakerEndpointName=\"canvas-new-deployment-03-04-2025-2-46-PM\" VpcId=\"vpc-01da878c2bd88aa11\" Subnet1=\"subnet-0a18a4f1ed28e93e6\" Subnet2=\"subnet-05e933724b1ae56c9\" Subnet3=\"subnet-00b037f6445d2dd5c\" Subnet4=\"subnet-0e2a2e38e324d535b\" Subnet5=\"subnet-02877580cb80614f4\" Subnet6=\"subnet-0f5772806db4e1f42\""
